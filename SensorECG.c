@@ -7,30 +7,30 @@
 #include "driver/uart.h"
 #include <string.h>
 
-// Definir el canal ADC
-#define ADC1_CHAN0 ADC_CHANNEL_4  // GPIO32
+// Configuración del ADC
+#define ADC1_CHAN0 ADC_CHANNEL_4  // GPIO32 para la salida ECG
 #define ADC_ATTEN ADC_ATTEN_DB_11 // Atenuación para 0-3.3V
 
-// UART Configuración
+// Configuración de UART
 #define UART_PORT_NUM UART_NUM_1
 #define TXD_PIN GPIO_NUM_1
 #define RXD_PIN GPIO_NUM_3
 #define TX_BUF_SIZE 1024
 
 adc_oneshot_unit_handle_t adc1_handle;
-static const char *TAG = "Muscle_Sensor";
+static const char *TAG = "ECG_Sensor";
 
 esp_err_t config_ADC();
 esp_err_t config_UART();
-esp_err_t read_EMG();
+esp_err_t read_ECG();
 
 void app_main() {
     config_ADC();
     config_UART();
 
     while (true) {
-        read_EMG();
-        vTaskDelay(pdMS_TO_TICKS(2)); // 500 Hz
+        read_ECG();
+        vTaskDelay(pdMS_TO_TICKS(2)); // ~500 Hz
     }
 }
 
@@ -65,15 +65,15 @@ esp_err_t config_UART() {
     return ESP_OK;
 }
 
-esp_err_t read_EMG() {
+esp_err_t read_ECG() {
     int adc_raw;
     float voltage;
     char data_str[50];
 
     adc_oneshot_read(adc1_handle, ADC1_CHAN0, &adc_raw);
-    voltage = (adc_raw * 3.3 / 4095.0); // Conversión ADC a Voltaje
+    voltage = (adc_raw * 3.3 / 4095.0); // Conversión ADC a Voltios
 
-    // Enviar por UART en formato /* V */
+    // Enviar datos en formato /* V */
     sprintf(data_str, "/* %2.3f V */\n", voltage);
     uart_write_bytes(UART_PORT_NUM, data_str, strlen(data_str));
 
