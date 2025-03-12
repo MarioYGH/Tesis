@@ -4,29 +4,19 @@
 #include "esp_log.h"
 #include "driver/adc.h"
 #include "esp_adc/adc_oneshot.h"
-#include "driver/uart.h"
-#include <string.h>
 
 // Configuración del ADC
-#define ADC1_CHAN0 ADC_CHANNEL_4  // GPIO32 para la salida ECG
+#define ADC1_CHAN0 ADC_CHANNEL_8  // GPIO9 para la salida ECG
 #define ADC_ATTEN ADC_ATTEN_DB_11 // Atenuación para 0-3.3V
-
-// Configuración de UART
-#define UART_PORT_NUM UART_NUM_1
-#define TXD_PIN GPIO_NUM_1
-#define RXD_PIN GPIO_NUM_3
-#define TX_BUF_SIZE 1024
 
 adc_oneshot_unit_handle_t adc1_handle;
 static const char *TAG = "ECG_Sensor";
 
 esp_err_t config_ADC();
-esp_err_t config_UART();
 esp_err_t read_ECG();
 
 void app_main() {
     config_ADC();
-    config_UART();
 
     while (true) {
         read_ECG();
@@ -49,33 +39,15 @@ esp_err_t config_ADC() {
     return ESP_OK;
 }
 
-esp_err_t config_UART() {
-    const uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
-    };
-
-    ESP_ERROR_CHECK(uart_driver_install(UART_PORT_NUM, TX_BUF_SIZE * 2, 0, 0, NULL, 0));
-    ESP_ERROR_CHECK(uart_param_config(UART_PORT_NUM, &uart_config));
-    ESP_ERROR_CHECK(uart_set_pin(UART_PORT_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-
-    return ESP_OK;
-}
-
 esp_err_t read_ECG() {
     int adc_raw;
     float voltage;
-    char data_str[50];
 
     adc_oneshot_read(adc1_handle, ADC1_CHAN0, &adc_raw);
     voltage = (adc_raw * 3.3 / 4095.0); // Conversión ADC a Voltios
 
-    // Enviar datos en formato /* V */
-    sprintf(data_str, "/* %2.3f V */\n", voltage);
-    uart_write_bytes(UART_PORT_NUM, data_str, strlen(data_str));
+    // Enviar datos por el puerto USB CDC
+    printf("/*%2.3f*/", voltage);
 
     ESP_LOGI(TAG, "Raw: %d, Voltage: %2.3f V", adc_raw, voltage);
 
