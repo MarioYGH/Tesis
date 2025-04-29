@@ -2,14 +2,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "driver/adc.h"
+#include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "driver/uart.h"
 #include <string.h>
 
 // Definir el canal ADC
 #define ADC1_CHAN0 ADC_CHANNEL_4  // GPIO32
-#define ADC_ATTEN ADC_ATTEN_DB_11 // Atenuación para 0-3.3V
+#define ADC_ATTEN ADC_ATTEN_DB_12 // Atenuación para 0-3.3V
 
 // UART Configuración
 #define UART_PORT_NUM UART_NUM_1
@@ -50,6 +50,9 @@ esp_err_t config_ADC() {
 }
 
 esp_err_t config_UART() {
+    // Cierra el UART si ya estaba instalado
+    uart_driver_delete(UART_PORT_NUM);  // No retorna error si no estaba instalado
+
     const uart_config_t uart_config = {
         .baud_rate = 115200,
         .data_bits = UART_DATA_8_BITS,
