@@ -77,7 +77,7 @@ esp_err_t read_EMG() {
     voltage = (adc_raw * 3.3 / 4095.0); // Conversión ADC a Voltaje
 
     // Enviar por UART en formato /* V */
-    sprintf(data_str, "%2.3f,\n", voltage);
+    sprintf(data_str, "%2.3f\n", voltage);
     uart_write_bytes(UART_PORT_NUM, data_str, strlen(data_str));
 
     ESP_LOGI(TAG, "Raw: %d, Voltage: %2.3f V", adc_raw, voltage);
