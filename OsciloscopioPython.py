@@ -6,9 +6,10 @@ import serial
 import threading
 import time
 import serial.tools.list_ports
+from collections import deque
 from PIL import Image, ImageTk
 
-# Configuración de la ventana principal
+# Configuración inicial
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("dark-blue")
 
@@ -16,48 +17,48 @@ root = ctk.CTk()
 root.title("Osciloscopio con ESP32")
 root.geometry("900x750")
 
-# Variables para la adquisición de señales
-running = False
-paused = False
+# Parámetros de señal
 amplitude_scale = 0.2
 time_scale = 5.0
 center_voltage = 1.8
-data = []
+
+# Variables de adquisición
+data = deque()
 esp = None
+running = False
+paused = False
 start_time = time.time()
 
-# Crear la figura de Matplotlib con mejor resolución y tamaño
+# Matplotlib
 fig, ax = plt.subplots(figsize=(10, 4), dpi=150)
+line, = ax.plot([], [], color="blue", linewidth=1.5, antialiased=True)
 ax.set_title("Señal del Osciloscopio")
 ax.set_xlabel("Tiempo (s)")
 ax.set_ylabel("Voltaje (V)")
-line, = ax.plot([], [], color="blue", linewidth=1.5, antialiased=True)
+ax.grid(True, linestyle='--', alpha=0.5)
 ax.set_xlim(0, time_scale)
 ax.set_ylim(center_voltage - amplitude_scale, center_voltage + amplitude_scale)
-ax.grid(True, linestyle='--', alpha=0.5)
 
-# Función para cargar y redimensionar imágenes
+# Cargar imágenes
 def cargar_imagen(ruta, ancho, alto):
     imagen = Image.open(ruta)
     imagen = imagen.resize((ancho, alto), Image.LANCZOS)
     return ImageTk.PhotoImage(imagen)
 
-# Cargar imágenes
 start_image = cargar_imagen("/home/mario/Documentos/Spyder/start.png", 60, 60)
 stop_image = cargar_imagen("/home/mario/Documentos/Spyder/stop.png", 60, 60)
 pause_image = cargar_imagen("/home/mario/Documentos/Spyder/pause.png", 60, 60)
 resume_image = cargar_imagen("/home/mario/Documentos/Spyder/resume.png", 60, 60)
 
+# UI Callbacks
 def update_amplitude(value):
     global amplitude_scale
     amplitude_scale = float(value)
-    fig.canvas.draw()
     amplitude_value_label.configure(text=f"Amplitud: {amplitude_scale:.2f}")
 
 def update_time(value):
     global time_scale
     time_scale = float(value)
-    fig.canvas.draw()
     time_value_label.configure(text=f"Tiempo: {time_scale:.2f}")
 
 def select_com():
@@ -71,10 +72,10 @@ def select_com():
         status_label.configure(text=f"Error: {e}")
 
 def toggle_acquisition():
-    global running, data
+    global running, data, start_time
     if running:
         running = False
-        data = []
+        data.clear()
         line.set_data([], [])
         fig.canvas.draw()
         start_stop_button.configure(image=start_image)
@@ -83,7 +84,8 @@ def toggle_acquisition():
             status_label.configure(text="Selecciona un puerto COM primero")
             return
         running = True
-        data = []
+        data.clear()
+        start_time = time.time()
         start_stop_button.configure(image=stop_image)
         threading.Thread(target=acquire_data, daemon=True).start()
 
@@ -93,43 +95,47 @@ def toggle_pause():
     pause_resume_button.configure(image=resume_image if paused else pause_image)
 
 def acquire_data():
-    global data, running, paused, start_time
-    start_time = time.time()
+    global data, running, paused
+    buffer = ""
     while running:
-        if not paused:
+        if not paused and esp.in_waiting:
             try:
-                line_data = esp.readline().decode(errors="ignore").strip()
-                if "," in line_data:
-                    parts = line_data.split(",")
-                    if len(parts) == 2:
-                        voltage = float(parts[0])
-                        bpm = int(parts[1])
-                        bpm_label.configure(text=f"BPM: {bpm}")
-                        current_time = time.time() - start_time
-                        data.append((current_time, voltage))
-                        data = [(t, v) for t, v in data if t > current_time - time_scale]
-                else:
-                    print(f"[Línea ignorada] {line_data}")
+                buffer += esp.read(esp.in_waiting).decode(errors="ignore")
+                lines = buffer.split("\n")
+                buffer = lines[-1]
+
+                for line_data in lines[:-1]:
+                    line_data = line_data.strip()
+                    if "," in line_data:
+                        parts = line_data.split(",")
+                        if len(parts) == 2:
+                            try:
+                                voltage = float(parts[0])
+                                bpm = int(parts[1])
+                                bpm_label.configure(text=f"BPM: {bpm}")
+                                current_time = time.time() - start_time
+                                data.append((current_time, voltage))
+                                # Limitar datos al tiempo visible
+                                while data and data[0][0] < current_time - time_scale:
+                                    data.popleft()
+                            except ValueError:
+                                continue
             except Exception as e:
-                print(f"Error: {e}")
-        else:# Crear la figura de Matplotlib
+                print(f"[Error lectura]: {e}")
+        time.sleep(0.001 if not paused else 0.05)
 
-            time.sleep(0.1)
-
-def update_plot(frame):# Crear la figura de Matplotlib
-
-    if running and not paused and data:
+def update_plot(frame):
+    if running and data:
         times, voltages = zip(*data)
         line.set_data(times, voltages)
         ax.set_xlim(max(0, times[-1] - time_scale), times[-1])
-        
-        # Mejor centrado dinámico del eje Y
+
         v_mean = sum(voltages) / len(voltages)
         ax.set_ylim(v_mean - amplitude_scale, v_mean + amplitude_scale)
 
-        fig.canvas.draw()
+        fig.canvas.draw_idle()
 
-# Interfaz
+# UI
 def build_ui():
     main_frame = ctk.CTkFrame(root)
     main_frame.pack(pady=20, padx=20, fill="x")
@@ -141,9 +147,7 @@ def build_ui():
     com_combobox = ctk.CTkComboBox(frame_left, values=[port.device for port in serial.tools.list_ports.comports()])
     com_combobox.pack(pady=5)
 
-    select_com_button = ctk.CTkButton(frame_left, text="Seleccionar COM", command=select_com)
-    select_com_button.pack(pady=5)
-
+    ctk.CTkButton(frame_left, text="Seleccionar COM", command=select_com).pack(pady=5)
     status_label = ctk.CTkLabel(frame_left, text="Selecciona un puerto COM")
     status_label.pack()
 
