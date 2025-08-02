@@ -9,27 +9,27 @@
 #include "esp_adc/adc_continuous.h"
 #include "esp_dsp.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 
 #define FS 1000.0
 #define NUM_MUESTRAS 1024
 #define FFT_SIZE 2048
-#define GANANCIA_VISUAL 1000.0f
+#define GANANCIA_VISUAL 100.0f
 
 #define ADC_UNIT        ADC_UNIT_1
-#define ADC_CHANNEL     ADC_CHANNEL_8  // GPIO9
+#define ADC_CHANNEL     ADC_CHANNEL_8
 #define ADC_ATTEN       ADC_ATTEN_DB_12
 #define ADC_BIT_WIDTH   ADC_BITWIDTH_12
 #define SAMPLE_FREQ_HZ  ((uint32_t)FS)
 #define FRAME_SIZE      256
 #define STORE_SIZE      1024
 
-static float buffer[NUM_MUESTRAS];  // buffer circular
+static float buffer[NUM_MUESTRAS];
 static int write_index = 0;
 
 adc_continuous_handle_t adc_handle = NULL;
 SemaphoreHandle_t semaforo_fft;
 
-// === Inicialización de ADC DMA ===
 void config_ADC_continuous() {
     adc_continuous_handle_cfg_t adc_config = {
         .max_store_buf_size = STORE_SIZE,
@@ -62,7 +62,7 @@ float* generar_fir(float fc, int N) {
     for (int k = 0; k < N; k++) {
         float n = k - (N - 1) / 2.0;
         float sinc_val = (fabs(n) < 1e-6) ? 1.0 : sinf(2 * M_PI * fc * n) / (M_PI * n);
-        float hamming = 0.54 - 0.46 * cosf(2 * M_PI * k / (N - 1));
+        float hamming = 0.54f - 0.46f * cosf(2 * M_PI * k / (N - 1));
         h[k] = 2 * fc * sinc_val * hamming;
     }
     return h;
@@ -81,6 +81,8 @@ void aplicar_filtro_en_frecuencia(float *fft_data, float *h_fir, int N) {
 
 void procesar_ECG() {
     static __attribute__((aligned(16))) float input[FFT_SIZE * 2] = {0};
+    static float *bp1 = NULL;
+    static float *bp2 = NULL;
 
     for (int i = 0; i < FFT_SIZE; i++) {
         int idx = (write_index + i) % NUM_MUESTRAS;
@@ -91,35 +93,33 @@ void procesar_ECG() {
     dsps_fft2r_fc32(input, FFT_SIZE);
     dsps_bit_rev2r_fc32(input, FFT_SIZE);
 
-    float *h1 = generar_fir(20.0 / (FS / 2), NUM_MUESTRAS);
-    float *h2 = generar_fir(150.0 / (FS / 2), NUM_MUESTRAS);
-    float *bp1 = (float *)heap_caps_malloc(FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_8BIT);
-    if (!bp1) return;
-
-    for (int i = 0; i < FFT_SIZE; i++) {
-        bp1[2 * i] = (i < NUM_MUESTRAS) ? (h2[i] - h1[i]) : 0.0f;
-        bp1[2 * i + 1] = 0.0f;
+    if (!bp1) {
+        float *h1 = generar_fir(20.0f / (FS / 2), NUM_MUESTRAS);
+        float *h2 = generar_fir(150.0f / (FS / 2), NUM_MUESTRAS);
+        bp1 = heap_caps_malloc(FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_8BIT);
+        for (int i = 0; i < FFT_SIZE; i++) {
+            bp1[2 * i] = (i < NUM_MUESTRAS) ? (h2[i] - h1[i]) : 0.0f;
+            bp1[2 * i + 1] = 0.0f;
+        }
+        free(h1); free(h2);
+        dsps_fft2r_fc32(bp1, FFT_SIZE);
+        dsps_bit_rev2r_fc32(bp1, FFT_SIZE);
     }
-    free(h1); free(h2);
-    dsps_fft2r_fc32(bp1, FFT_SIZE);
-    dsps_bit_rev2r_fc32(bp1, FFT_SIZE);
     aplicar_filtro_en_frecuencia(input, bp1, FFT_SIZE);
-    free(bp1);
 
-    float *h3 = generar_fir(0.5 / (FS / 2), NUM_MUESTRAS);
-    float *h4 = generar_fir(3.0 / (FS / 2), NUM_MUESTRAS);
-    float *bp2 = (float *)heap_caps_malloc(FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_8BIT);
-    if (!bp2) return;
-
-    for (int i = 0; i < FFT_SIZE; i++) {
-        bp2[2 * i] = (i < NUM_MUESTRAS) ? (h4[i] - h3[i]) : 0.0f;
-        bp2[2 * i + 1] = 0.0f;
+    if (!bp2) {
+        float *h3 = generar_fir(0.5f / (FS / 2), NUM_MUESTRAS);
+        float *h4 = generar_fir(3.0f / (FS / 2), NUM_MUESTRAS);
+        bp2 = heap_caps_malloc(FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_8BIT);
+        for (int i = 0; i < FFT_SIZE; i++) {
+            bp2[2 * i] = (i < NUM_MUESTRAS) ? (h4[i] - h3[i]) : 0.0f;
+            bp2[2 * i + 1] = 0.0f;
+        }
+        free(h3); free(h4);
+        dsps_fft2r_fc32(bp2, FFT_SIZE);
+        dsps_bit_rev2r_fc32(bp2, FFT_SIZE);
     }
-    free(h3); free(h4);
-    dsps_fft2r_fc32(bp2, FFT_SIZE);
-    dsps_bit_rev2r_fc32(bp2, FFT_SIZE);
     aplicar_filtro_en_frecuencia(input, bp2, FFT_SIZE);
-    free(bp2);
 
     for (int i = 0; i < FFT_SIZE; i++) {
         input[2 * i + 1] *= -1.0f;
@@ -127,22 +127,18 @@ void procesar_ECG() {
     dsps_fft2r_fc32(input, FFT_SIZE);
     dsps_bit_rev2r_fc32(input, FFT_SIZE);
 
-    for (int i = 0; i < FFT_SIZE; i++) {
+    for (int i = 0; i < FFT_SIZE; i += 4) {
         int idx = (write_index + i) % NUM_MUESTRAS;
-        float original = buffer[idx];  // señal cruda original
+        float original = buffer[idx];
         float filtrada = input[2 * i] / FFT_SIZE;
-
-        // Salida para Serial Studio: Canal 1 (original), Canal 2 (filtrada)
         printf("%.4f,%.4f\r\n", original, filtrada * GANANCIA_VISUAL);
-
-        fflush(stdout);
     }
-
 }
 
 void read_task_continuous(void *pvParameters) {
     uint8_t result[FRAME_SIZE];
     adc_digi_output_data_t *sample;
+    static bool pendiente_fft = false;
 
     while (1) {
         uint32_t bytes_read = 0;
@@ -156,8 +152,12 @@ void read_task_continuous(void *pvParameters) {
                     buffer[write_index] = voltage;
                     write_index = (write_index + 1) % NUM_MUESTRAS;
 
-                    if (write_index % 128 == 0) {
+                    if (!pendiente_fft && write_index % 128 == 0) {
                         xSemaphoreGive(semaforo_fft);
+                        pendiente_fft = true;
+                    }
+                    if (write_index % 128 != 0) {
+                        pendiente_fft = false;
                     }
                 }
             }
@@ -174,10 +174,13 @@ void fft_task(void *pvParameters) {
 }
 
 void app_main() {
+    esp_reset_reason_t reason = esp_reset_reason();
+    ESP_LOGW("REBOOT", "Razón de reinicio: %d", reason);
+
     config_ADC_continuous();
     ESP_ERROR_CHECK(dsps_fft2r_init_fc32(NULL, FFT_SIZE));
     semaforo_fft = xSemaphoreCreateBinary();
 
     xTaskCreatePinnedToCore(read_task_continuous, "ReadECG_DMA", 4096, NULL, 1, NULL, 1);
-    xTaskCreatePinnedToCore(fft_task, "FFTProc", 8192, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(fft_task, "FFTProc", 8192, NULL, 3, NULL, 0);
 }
