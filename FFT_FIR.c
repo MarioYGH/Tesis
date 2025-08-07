@@ -16,7 +16,7 @@
 #define NUM_MUESTRAS 1024
 #define FFT_SIZE 2048
 #define TAPAS 513
-#define GANANCIA_VISUAL 5.0f
+#define GANANCIA_VISUAL 3.0f
 
 #define ADC_UNIT        ADC_UNIT_1
 #define ADC_CHANNEL     ADC_CHANNEL_8
